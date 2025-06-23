@@ -1,0 +1,18 @@
+# Interval for fetching data in seconds
+fetch_interval = { secs = 60, nanos = 0 }
+
+# Path to the bonds CLI binary
+# For local development with nodeenv
+# bonds_cli_bin_path = "./.nodeenv/bin/validator-bonds-institutional"
+# For default npm installation path
+bonds_cli_bin_path = "/usr/local/bin/validator-bonds-institutional"
+
+# Address and port to listen on
+# listen_addr = "127.0.0.1:8080"
+# For docker/k8s
+listen_addr = "0.0.0.0:8080"
+
+[[addresses]]
+# List of bond or vote account addresses to monitor
+name = "Your validator"
+address = "bond_or_vote_account_address_here"
