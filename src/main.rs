@@ -8,7 +8,9 @@ use std::{
     process::Command,
     sync::{Arc, RwLock},
 };
-use tracing::{info};
+use tracing::info;
+
+const METRICS_PREFIX: &str = "marinade_bond_monitor";
 
 #[derive(Debug, serde::Deserialize)]
 pub struct Config {
@@ -76,7 +78,10 @@ pub struct ApiContext {
 impl ApiContext {
     pub fn new(bonds_state: Arc<RwLock<BondsState>>) -> Self {
         let bond_value_active_gauge = prometheus::GaugeVec::new(
-            prometheus::Opts::new("bond_value_active", "Active bond value"),
+            prometheus::Opts::new(
+                format!("{}_bond_value_active_sol", METRICS_PREFIX),
+                "Active bond value in SOL",
+            ),
             &["name", "address", "vote_account", "bond_account"],
         )
         .expect("creating valid metric should not fail");
