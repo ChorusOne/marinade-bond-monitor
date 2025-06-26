@@ -48,9 +48,9 @@ fn main() -> anyhow::Result<()> {
     }));
     let api_context = Arc::new(ApiContext::new(bonds_state.clone()));
 
-    let addresses = config.addresses.clone();
+    let addresses = config.addresses;
     let fetch_interval = config.fetch_interval;
-    let bonds_cli_bin_path = config.bonds_cli_bin_path.clone();
+    let bonds_cli_bin_path = config.bonds_cli_bin_path;
 
     let monitor_handle = std::thread::spawn(move || {
         monitor_bonds(addresses, fetch_interval, &bonds_cli_bin_path, bonds_state);
@@ -252,7 +252,8 @@ struct VoteAccount {
 fn get_bond_value(cmd_path: &str, addr: &str) -> Result<BondData, Box<dyn std::error::Error>> {
     let output = Command::new(cmd_path)
         .args(["show-bond", addr, "--with-funding"])
-        .output()?;
+        .output()
+        .map_err(|err| format!("Failed to run command {cmd_path}: {:?}", err))?;
 
     if !output.status.success() {
         return Err(format!(
