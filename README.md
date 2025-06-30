@@ -31,3 +31,10 @@ And fetch metrics:
 ```
 curl 127.0.0.1:8080/metrics
 ```
+
+## Build as Docker image
+
+You can also build a Docker image and run as a container, for that simply run:
+```
+docker build .
+```
