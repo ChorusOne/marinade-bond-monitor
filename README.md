@@ -19,6 +19,10 @@ npm install -g @marinade.finance/validator-bonds-cli-institutional@latest
 
 ## Run
 
+For an example configuration see [config.toml](./config.toml). In order to run
+it locally you need to specify correct path to `validator-bonds-institutional`
+cli and your vote or bond account address.
+
 ```
 cargo run -- ./config.toml
 ```
