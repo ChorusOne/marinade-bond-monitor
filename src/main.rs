@@ -169,7 +169,7 @@ fn monitor_bonds(
         let mut updated = 0;
 
         for addr in &addresses {
-            let bond_data_res = get_bond_value(cmd_path, &addr.address);
+            let bond_data_res = get_bond_value_with_retries(cmd_path, &addr.address, 4);
             let mut bond_state_lock = bonds_state.write().unwrap();
 
             match bond_data_res {
@@ -180,7 +180,7 @@ fn monitor_bonds(
                 }
                 Err(err) => {
                     tracing::error!(
-                        "Failed to get bond data for address {}: {}",
+                        "Failed to get bond data with max attempts for address {}: {}",
                         addr.address,
                         err
                     );
@@ -247,6 +247,37 @@ struct VoteAccount {
     node_pubkey: String,
     authorized_withdrawer: String,
     commission: i32,
+}
+
+fn get_bond_value_with_retries(
+    cmd_path: &str,
+    addr: &str,
+    max_attempts: u32,
+) -> Result<BondData, Box<dyn std::error::Error>> {
+    let mut attempt = 0;
+    loop {
+        attempt += 1;
+        match get_bond_value(cmd_path, addr) {
+            Ok(bond_data) => return Ok(bond_data),
+            Err(err) => {
+                if attempt >= max_attempts {
+                    return Err(err);
+                }
+                // Exponential backoff would increase sleep time too much, so
+                // we do it linearly.
+                let sleep_time = std::time::Duration::from_secs(1) * attempt;
+                tracing::warn!(
+                    "Failed to get bond data for {}: {:?}. Attempt {}/{}. Will retry after {}s...",
+                    addr,
+                    err,
+                    attempt,
+                    max_attempts,
+                    sleep_time.as_secs()
+                );
+                std::thread::sleep(sleep_time);
+            }
+        }
+    }
 }
 
 fn get_bond_value(cmd_path: &str, addr: &str) -> Result<BondData, Box<dyn std::error::Error>> {
