@@ -134,7 +134,7 @@ async fn metrics_handler(
             .with_label_values(&[
                 &addr.name,
                 &addr.address,
-                &bond_data.vote_account.node_pubkey,
+                &bond_data.account.vote_account,
                 &bond_data.public_key,
             ])
             .set(active_bond_sol);
@@ -206,7 +206,6 @@ struct BondData {
     program_id: String,
     public_key: String,
     account: Account,
-    vote_account: VoteAccount,
     amount_owned: String,
     amount_active: String,
     number_active_stake_accounts: i32,
@@ -214,7 +213,6 @@ struct BondData {
     number_settlement_stake_accounts: i32,
     amount_to_withdraw: String,
     withdraw_request: String,
-    bond_mint: String,
 }
 
 impl BondData {
