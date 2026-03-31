@@ -15,4 +15,4 @@ listen_addr = "0.0.0.0:8080"
 [[addresses]]
 # List of bond or vote account addresses to monitor
 name = "Your validator"
-address = "bond_or_vote_account_address_here"
+address = "bond_account_address_here"
