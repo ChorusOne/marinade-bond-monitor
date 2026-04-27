@@ -13,7 +13,7 @@ WORKDIR /app
 COPY --from=builder /app/target/release/marinade-bond-monitor /usr/local/bin/marinade-bond-monitor
 
 # Install validator-bonds-cli-institutional
-RUN npm install -g @marinade.finance/validator-bonds-cli-institutional@2.4.3
+RUN npm install -g @marinade.finance/validator-bonds-cli-institutional@2.4.5
 
 # Set the default command
 CMD ["marinade-bond-monitor"]
