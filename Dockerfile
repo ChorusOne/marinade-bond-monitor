@@ -6,7 +6,7 @@ COPY . .
 RUN cargo build --release
 
 # Use a lightweight Node.js image for the final image
-FROM node:18-slim
+FROM node:24-slim
 
 WORKDIR /app
 
