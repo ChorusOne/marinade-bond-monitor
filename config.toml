@@ -1,11 +1,9 @@
 # Interval for fetching data in seconds
 fetch_interval = { secs = 60, nanos = 0 }
 
-# Path to the bonds CLI binary
-# For local development with nodeenv
-# bonds_cli_bin_path = "./.nodeenv/bin/validator-bonds-institutional"
-# For default npm installation path
-bonds_cli_bin_path = "/usr/local/bin/validator-bonds-institutional"
+# Solana JSON-RPC endpoint. Use a private RPC for production — the public
+# mainnet endpoint is heavily rate-limited.
+rpc_url = "https://api.mainnet-beta.solana.com"
 
 # Address and port to listen on
 # listen_addr = "127.0.0.1:8080"

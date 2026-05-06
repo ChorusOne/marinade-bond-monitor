@@ -5,15 +5,12 @@ WORKDIR /app
 COPY . .
 RUN cargo build --release
 
-# Use a lightweight Node.js image for the final image
-FROM node:24-slim
+FROM debian:bookworm-slim
 
-WORKDIR /app
+RUN apt-get update \
+    && apt-get install -y --no-install-recommends ca-certificates \
+    && rm -rf /var/lib/apt/lists/*
 
 COPY --from=builder /app/target/release/marinade-bond-monitor /usr/local/bin/marinade-bond-monitor
 
-# Install validator-bonds-cli-institutional
-RUN npm install -g @marinade.finance/validator-bonds-cli-institutional@2.4.5
-
-# Set the default command
 CMD ["marinade-bond-monitor"]

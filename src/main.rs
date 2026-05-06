@@ -1,14 +1,20 @@
+mod bond;
+mod pubkey;
+mod rpc;
+
 use anyhow::Context;
 use axum::{extract::State, routing::get};
 use prometheus::core::Collector;
-use serde_json::Error as SerdeError;
 use std::{
     collections::HashMap,
     net::SocketAddr,
-    process::Command,
     sync::{Arc, RwLock},
 };
 use tracing::info;
+
+use crate::bond::{fetch_bond_funding, lamports_to_sol, BondFunding};
+use crate::pubkey::Pubkey;
+use crate::rpc::RpcClient;
 
 const METRICS_PREFIX: &str = "marinade_bond_monitor";
 
@@ -17,7 +23,7 @@ pub struct Config {
     /// Bond or vote account addresses to monitor
     pub addresses: Vec<Address>,
     pub fetch_interval: std::time::Duration,
-    pub bonds_cli_bin_path: String,
+    pub rpc_url: String,
     pub listen_addr: SocketAddr,
 }
 
@@ -43,18 +49,29 @@ fn main() -> anyhow::Result<()> {
     let config_str = std::fs::read_to_string(config_path).context("Failed to read config file")?;
     let config: Config = toml::from_str(&config_str).context("Failed to parse config file")?;
 
+    // Validate addresses upfront so misconfigured entries fail fast.
+    let parsed_addresses: Vec<(Address, Pubkey)> = config
+        .addresses
+        .into_iter()
+        .map(|a| {
+            let pk = Pubkey::from_str(&a.address)
+                .with_context(|| format!("invalid address '{}' for {}", a.address, a.name))?;
+            Ok((a, pk))
+        })
+        .collect::<anyhow::Result<_>>()?;
+
+    let rpc = RpcClient::new(config.rpc_url).context("Failed to build RPC client")?;
+
     let bonds_state = Arc::new(RwLock::new(BondsState {
         bond_by_addr: HashMap::new(),
     }));
     let api_context = Arc::new(ApiContext::new(bonds_state.clone()));
 
-    let addresses = config.addresses;
     let fetch_interval = config.fetch_interval;
-    let bonds_cli_bin_path = config.bonds_cli_bin_path;
-
     let monitor_handle = std::thread::spawn(move || {
-        monitor_bonds(addresses, fetch_interval, &bonds_cli_bin_path, bonds_state);
+        monitor_bonds(parsed_addresses, fetch_interval, rpc, bonds_state);
     });
+
     tokio::runtime::Builder::new_multi_thread()
         .enable_all()
         .build()
@@ -113,29 +130,16 @@ async fn metrics_handler(
     let bonds_state = api_context.bonds_state.read().unwrap();
 
     api_context.bond_value_active_gauge.reset();
-    for (addr, bond_data) in &bonds_state.bond_by_addr {
-        let active_bond_sol = match bond_data.active_amount_sol() {
-            Ok(value) => value,
-            Err(err) => {
-                tracing::error!(
-                    "Failed to parse active bond amount '{}' as SOL for {}: {}",
-                    bond_data.amount_active,
-                    addr.address,
-                    err
-                );
-                // Skip this address if parsing fails
-                // Metrics will be missing so it is easy to alert for this
-                continue;
-            }
-        };
+    for (addr, funding) in &bonds_state.bond_by_addr {
+        let active_bond_sol = lamports_to_sol(funding.amount_active_lamports);
 
         api_context
             .bond_value_active_gauge
             .with_label_values(&[
                 &addr.name,
                 &addr.address,
-                &bond_data.account.vote_account,
-                &bond_data.public_key,
+                &funding.vote_account.to_base58(),
+                &funding.bond_account.to_base58(),
             ])
             .set(active_bond_sol);
     }
@@ -155,32 +159,32 @@ async fn metrics_handler(
 }
 
 pub struct BondsState {
-    bond_by_addr: HashMap<Address, BondData>,
+    bond_by_addr: HashMap<Address, BondFunding>,
 }
 
 fn monitor_bonds(
-    addresses: Vec<Address>,
+    addresses: Vec<(Address, Pubkey)>,
     interval: std::time::Duration,
-    cmd_path: &str,
+    rpc: RpcClient,
     bonds_state: Arc<RwLock<BondsState>>,
 ) {
     loop {
         tracing::debug!("Retrieving bond data for {} addresses", addresses.len());
         let mut updated = 0;
 
-        for addr in &addresses {
-            let bond_data_res = get_bond_value_with_retries(cmd_path, &addr.address, 4);
+        for (addr, pubkey) in &addresses {
+            let result = fetch_with_retries(&rpc, pubkey, 4);
             let mut bond_state_lock = bonds_state.write().unwrap();
 
-            match bond_data_res {
-                Ok(bond_data) => {
-                    bond_state_lock.bond_by_addr.insert(addr.clone(), bond_data);
+            match result {
+                Ok(funding) => {
+                    bond_state_lock.bond_by_addr.insert(addr.clone(), funding);
                     updated += 1;
                     tracing::debug!("Updated bond data for {}", addr.address);
                 }
                 Err(err) => {
                     tracing::error!(
-                        "Failed to get bond data with max attempts for address {}: {}",
+                        "Failed to get bond data with max attempts for address {}: {:#}",
                         addr.address,
                         err
                     );
@@ -199,73 +203,24 @@ fn monitor_bonds(
     }
 }
 
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-struct BondData {
-    program_id: String,
-    public_key: String,
-    account: Account,
-    amount_owned: String,
-    amount_active: String,
-    number_active_stake_accounts: i32,
-    amount_at_settlements: String,
-    number_settlement_stake_accounts: i32,
-    amount_to_withdraw: String,
-    withdraw_request: String,
-}
-
-impl BondData {
-    pub fn active_amount_sol(&self) -> anyhow::Result<f64> {
-        // I do not know if there are any other suffixes, but not having just
-        // a field with number looks terrible...
-        let value = self
-            .amount_active
-            .strip_suffix(" SOLs")
-            .context("Failed to strip ' SOLs' suffix from amount_active")?;
-        value
-            .parse()
-            .context("Failed to parse amount_active as f64")
-    }
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-struct Account {
-    config: String,
-    vote_account: String,
-    authority: String,
-}
-
-#[derive(Debug, serde::Deserialize)]
-#[serde(rename_all = "camelCase")]
-#[allow(dead_code)]
-struct VoteAccount {
-    node_pubkey: String,
-    authorized_withdrawer: String,
-    commission: i32,
-}
-
-fn get_bond_value_with_retries(
-    cmd_path: &str,
-    addr: &str,
+fn fetch_with_retries(
+    rpc: &RpcClient,
+    addr: &Pubkey,
     max_attempts: u32,
-) -> Result<BondData, Box<dyn std::error::Error>> {
+) -> anyhow::Result<BondFunding> {
     let mut attempt = 0;
     loop {
         attempt += 1;
-        match get_bond_value(cmd_path, addr) {
-            Ok(bond_data) => return Ok(bond_data),
+        match fetch_bond_funding(rpc, addr) {
+            Ok(funding) => return Ok(funding),
             Err(err) => {
                 if attempt >= max_attempts {
                     return Err(err);
                 }
-                // Exponential backoff would increase sleep time too much, so
-                // we do it linearly.
+                // Linear backoff (exponential would grow too fast for our 60s interval).
                 let sleep_time = std::time::Duration::from_secs(1) * attempt;
                 tracing::warn!(
-                    "Failed to get bond data for {}: {:?}. Attempt {}/{}. Will retry after {}s...",
+                    "Failed to get bond data for {}: {:#}. Attempt {}/{}. Will retry after {}s...",
                     addr,
                     err,
                     attempt,
@@ -276,39 +231,4 @@ fn get_bond_value_with_retries(
             }
         }
     }
-}
-
-fn get_bond_value(cmd_path: &str, addr: &str) -> Result<BondData, Box<dyn std::error::Error>> {
-    let output = Command::new(cmd_path)
-        .args(["show-bond", addr, "--with-funding"])
-        .output()
-        .map_err(|err| format!("Failed to run command {cmd_path}: {:?}", err))?;
-
-    if !output.status.success() {
-        return Err(format!(
-            "Failed to run show-bond command: stdout: {}, stderr: {}",
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr)
-        )
-        .into());
-    }
-
-    let bond_data: BondData =
-        serde_json::from_slice(&output.stdout).map_err(|err: SerdeError| {
-            format!(
-                "Failed to unmarshal bond data: {}. Raw output: {}",
-                err,
-                String::from_utf8_lossy(&output.stdout)
-            )
-        })?;
-
-    if bond_data.public_key != addr && bond_data.account.vote_account != addr {
-        return Err(format!(
-            "Bond data does not match the provided address: {}. Did something change?",
-            addr
-        )
-        .into());
-    }
-
-    Ok(bond_data)
 }
